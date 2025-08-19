@@ -83,7 +83,7 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   protected _errorCount = 0;
   protected _errorUrl = "";
   protected _preparing = false;
-  protected _currentAudioInfo: AudioSource<any, any> | null = null;
+  protected _currentAudioInfo: AudioSource<any, any> & { isFallbacked?: boolean } | null = null;
   protected _currentAudioStream: Readable | null = null;
   protected _cost = 0;
   protected _finishTimeout = false;
@@ -104,7 +104,7 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     this._preparing = val;
   }
 
-  get currentAudioInfo(): Readonly<AudioSource<any, any>> | null {
+  get currentAudioInfo(): Readonly<AudioSource<any, any> & { isFallbacked?: boolean }> | null {
     return this._currentAudioInfo;
   }
 
@@ -509,14 +509,11 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     }
 
     /* eslint-enable @stylistic/multiline-ternary */
-
-    if (this.currentAudioInfo.isYouTube()) {
-      if (this.currentAudioInfo.isFallbacked) {
-        embed.addField(
-          `:warning: ${i18next.t("attention", { lng: this.server.locale })}`,
-          i18next.t("components:queue.fallbackNotice", { lng: this.server.locale }),
-        );
-      }
+    if ("isFallbacked" in this.currentAudioInfo && this.currentAudioInfo.isFallbacked) {
+      embed.addField(
+        `:warning: ${i18next.t("attention", { lng: this.server.locale })}`,
+        i18next.t("components:queue.fallbackNotice", { lng: this.server.locale }),
+      );
     }
 
     this.emit("playStartUIPrepared", embed);
