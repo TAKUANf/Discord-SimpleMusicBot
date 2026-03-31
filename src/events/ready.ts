@@ -105,6 +105,9 @@ export async function onReady(this: MusicBot) {
   }, 10 * 1000).unref();
   this.logger.info("Interval jobs set up successfully");
 
+  // Initialize playback backend (Lavalink if configured)
+  this["initPlaybackBackend"]();
+
   this.emit("beforeReady");
 
   // Finish initializing

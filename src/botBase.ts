@@ -25,11 +25,15 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
+import type { PlaybackBackend } from "./Component/playbackBackend";
+
 import { HttpBackupper } from "./Component/backupper/httpBased";
 import { MongoBackupper } from "./Component/backupper/mongodb";
 import { ReplitBackupper } from "./Component/backupper/replit";
 import { CacheController } from "./Component/cacheController";
 import { InteractionCollectorManager } from "./Component/collectors/InteractionCollectorManager";
+import { LavalinkBackend } from "./Component/playbackBackend/lavalinkBackend";
+import { LocalBackend } from "./Component/playbackBackend/localBackend";
 import { RateLimitController } from "./Component/rateLimitController";
 import { GuildDataContainer } from "./Structure";
 import { LogEmitter } from "./Structure";
@@ -64,6 +68,7 @@ export abstract class MusicBotBase extends LogEmitter<BotBaseEvents> {
   protected readonly _interactionCollectorManager: InteractionCollectorManager = new InteractionCollectorManager();
   protected readonly _cacheController: CacheController;
   protected _backupper: Backupper | null = null;
+  protected _playbackBackend: PlaybackBackend;
   private maintenanceTickCount = 0;
 
   /**
@@ -136,6 +141,17 @@ export abstract class MusicBotBase extends LogEmitter<BotBaseEvents> {
     return this._rateLimitController;
   }
 
+  /**
+   * 再生バックエンド
+   */
+  get playbackBackend(): PlaybackBackend {
+    return this._playbackBackend;
+  }
+
+  get isLavalinkMode(): boolean {
+    return this._playbackBackend.type === "lavalink";
+  }
+
   constructor(protected readonly maintenance: boolean = false) {
     super("Main");
     this._instantiatedTime = new Date();
@@ -180,6 +196,32 @@ export abstract class MusicBotBase extends LogEmitter<BotBaseEvents> {
       config.cacheLevel === "persistent" || config.cacheLevel === "full",
       config.cacheLevel === "full",
     );
+    // Playback backend is initialized as local by default;
+    // Lavalink backend will be initialized after the client is ready via initPlaybackBackend()
+    this._playbackBackend = new LocalBackend();
+  }
+
+  /**
+   * 再生バックエンドを初期化します。Lavalinkが設定されている場合、Lavalinkバックエンドを使用します。
+   * クライアントの準備完了後に呼び出す必要があります。
+   */
+  protected initPlaybackBackend(): void {
+    const config = getConfig();
+    if (config.lavalink?.enabled && config.lavalink.nodes?.length > 0) {
+      this.logger.info("Initializing Lavalink playback backend");
+      this._playbackBackend = new LavalinkBackend(
+        this._client,
+        config.lavalink.nodes.map(n => ({
+          name: n.name,
+          url: n.url,
+          auth: n.auth,
+          secure: n.secure ?? false,
+        })),
+      );
+      this.logger.info(`Lavalink backend initialized with ${config.lavalink.nodes.length} node(s)`);
+    } else {
+      this.logger.info("Using local playback backend");
+    }
   }
 
   /**

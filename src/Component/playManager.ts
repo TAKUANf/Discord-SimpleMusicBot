@@ -18,6 +18,7 @@
 
 import type { AudioSource } from "../AudioSource";
 import type { GuildDataContainer } from "../Structure";
+import type { LavalinkBackend } from "./playbackBackend/lavalinkBackend";
 import type { AudioPlayer } from "@discordjs/voice";
 import type { AnyTextableGuildChannel, TextChannel, Member, Message } from "oceanic.js";
 import type { Readable } from "stream";
@@ -95,6 +96,16 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   protected _lastMember: string | null = null;
   protected _sleeptimerCurrentSong: boolean = false;
   protected _sleeptimerTimeout: NodeJS.Timeout | null = null;
+  protected _lavalinkPlaying: boolean = false;
+  protected _lavalinkPaused: boolean = false;
+
+  protected get isLavalinkMode(): boolean {
+    return this.server.bot.isLavalinkMode;
+  }
+
+  protected get lavalinkBackend(): LavalinkBackend {
+    return this.server.bot.playbackBackend as LavalinkBackend;
+  }
 
   get preparing() {
     return this._preparing;
@@ -121,6 +132,11 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
    *  接続され、再生途中にあるか（たとえ一時停止されていても）
    */
   get isPlaying(): boolean {
+    if (this.isLavalinkMode) {
+      const guildId = this.server.getGuildId();
+      return this.isConnecting
+        && (this._lavalinkPlaying || this._lavalinkPaused || !!this._waitForLiveAbortController);
+    }
     return this.isConnecting
       && !!this._player
       && (this._player.state.status === AudioPlayerStatus.Playing || this._player.state.status === AudioPlayerStatus.Paused || !!this._waitForLiveAbortController);
@@ -130,6 +146,9 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
    *  VCに接続中かどうか
    */
   get isConnecting(): boolean {
+    if (this.isLavalinkMode) {
+      return this.lavalinkBackend.isConnected(this.server.getGuildId());
+    }
     return !!this.server.connection && this.server.connection.state.status === VoiceConnectionStatus.Ready;
   }
 
@@ -137,6 +156,9 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
    * 一時停止されているか
    */
   get isPaused(): boolean {
+    if (this.isLavalinkMode) {
+      return this.isConnecting && this._lavalinkPaused;
+    }
     return this.isConnecting && !!this._player && this._player.state.status === AudioPlayerStatus.Paused;
   }
 
@@ -145,6 +167,9 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
    * @remarks ミリ秒単位なので秒に直すには1000分の一する必要がある
    */
   get currentTime(): number {
+    if (this.isLavalinkMode) {
+      return this._seek * 1000 + this.lavalinkBackend.currentTime(this.server.getGuildId());
+    }
     if (!this.isPlaying || this._player!.state.status === AudioPlayerStatus.Idle || this._player!.state.status === AudioPlayerStatus.Buffering) {
       return 0;
     }
@@ -172,6 +197,9 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
 
   setVolume(val: number) {
     this._volume = val;
+    if (this.isLavalinkMode) {
+      return this.lavalinkBackend.setVolume(this.server.getGuildId(), val);
+    }
     if (this._resource?.volumeTransformer) {
       this._resource.volumeTransformer.setVolumeLogarithmic(val / 100);
       return true;
@@ -281,6 +309,12 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
       // シーク位置を確認
       if (this.currentAudioInfo!.lengthSeconds <= time) time = 0;
       this._seek = time;
+
+      // Lavalinkモードの場合はLavalinkバックエンドで再生
+      if (this.isLavalinkMode) {
+        await this.playViaLavalink(time, message, messageSendingScheduledAt);
+        return this;
+      }
 
       // QueueContentからストリーム情報を取得
       const rawStream = time > 0
@@ -598,11 +632,15 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   }
 
   protected getIsBadCondition() {
+    const connecting = this.isLavalinkMode
+      ? this.lavalinkBackend.isConnected(this.server.getGuildId())
+      : this.isConnecting;
+
     if (config.debug) {
-      this.logger.debug(`Condition: { connecting: ${this.isConnecting}, playing: ${this.isPlaying}, empty: ${this.server.queue.isEmpty}, preparing: ${this.preparing} }`);
+      this.logger.debug(`Condition: { connecting: ${connecting}, playing: ${this.isPlaying}, empty: ${this.server.queue.isEmpty}, preparing: ${this.preparing} }`);
     }
     // 再生できる状態か確認
-    return /* 接続していない */ !this.isConnecting
+    return /* 接続していない */ !connecting
       // なにかしら再生中
       || this.isPlaying
       // キューが空
@@ -617,12 +655,118 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   }
 
   /**
+   * Lavalinkバックエンドを使用して再生します。
+   */
+  protected async playViaLavalink(
+    time: number,
+    message: DeferredMessage | Message | null,
+    messageSendingScheduledAt: number | null,
+  ): Promise<void> {
+    const guildId = this.server.getGuildId();
+    const backend = this.lavalinkBackend;
+
+    // Set up Lavalink event callbacks for this guild
+    backend.removeAllCallbacks(guildId);
+    backend.onTrackEnd(guildId, () => {
+      this._lavalinkPlaying = false;
+      this._lavalinkPaused = false;
+      this.onStreamFinished().catch(this.logger.error);
+    });
+    backend.onTrackError(guildId, (error) => {
+      this._lavalinkPlaying = false;
+      this._lavalinkPaused = false;
+      this.handleError(error).catch(this.logger.error);
+    });
+
+    // Resolve the track identifier for Lavalink
+    const identifier = this.currentAudioInfo!.url;
+
+    await backend.play(guildId, {
+      identifier,
+      lengthSeconds: this.currentAudioInfo!.lengthSeconds,
+      title: this.currentAudioInfo!.title,
+      isLive: this.currentAudioInfo!.isYouTube() && this.currentAudioInfo!.isLiveStream,
+    }, {
+      seekSec: time > 0 ? time : undefined,
+      volume: this._volume,
+    });
+
+    // Apply audio effects as Lavalink filters
+    if (this.server.audioEffects.hasAnyEffect()) {
+      const filters = this.server.audioEffects.exportLavalinkFilters();
+      await backend.setFilters(guildId, filters);
+    }
+
+    this._cost = 0; // Lavalink handles processing
+    this._lastMember = null;
+    this._lavalinkPlaying = true;
+    this._lavalinkPaused = false;
+    this.preparing = false;
+    this._playing = true;
+    this.emit("playStarted");
+
+    this.logger.info("Lavalink playback started successfully");
+
+    // Update UI message
+    if (message) {
+      const messageContent = this.createNowPlayingMessage();
+      this.logger.debug(`Preparing elapsed time: ${Date.now() - messageSendingScheduledAt!}ms`);
+
+      const replyMessage = await message.edit({
+        ...messageContent,
+        flags: this.server.preferences.nowPlayingNotificationLevel === NowPlayingNotificationLevel.Silent
+          ? MessageFlags.SUPPRESS_NOTIFICATIONS
+          : 0,
+      }).catch(er => {
+        this.logger.error(er);
+        return null;
+      });
+
+      if (replyMessage) {
+        this.eitherOnce(["playCompleted", "handledError", "stop"], () => {
+          replyMessage.edit({ components: [] }).catch(this.logger.error);
+        });
+      }
+    }
+
+    // Update voice channel status
+    if (this.currentAudioInfo && this.server.preferences.updateChannelTopic) {
+      const nowPlayingMessage = `🎵 ${i18next.t("components:nowplaying.nowplayingItemName")}: ${this.currentAudioInfo.title}`.substring(0, 120);
+      if (this.server.connectingVoiceChannel instanceof VoiceChannel) {
+        await this.server.connectingVoiceChannel.setStatus(nowPlayingMessage).catch(this.logger.error);
+      } else if (this.server.connectingVoiceChannel instanceof StageChannel) {
+        await this.server.connectingVoiceChannel.editStageInstance({ topic: nowPlayingMessage }).catch(this.logger.error);
+      }
+    }
+
+    // Prefetch next song
+    if (this.server.queue.length >= 2 && this.currentAudioInfo!.lengthSeconds <= 7200) {
+      const nextSong = this.server.queue.get(1);
+      if (nextSong.basicInfo.isYouTube()) {
+        this.logger.info("Prefetching next song beforehand.");
+        await nextSong.basicInfo.refreshInfo({ forceCache: true, onlyIfNoCache: true }).catch(this.logger.error);
+      }
+    }
+  }
+
+  /**
    * 停止します。切断するにはDisconnectを使用してください。
    * @returns this
   */
   async stop({ force = false, wait = false }: { force?: boolean, wait?: boolean } = {}): Promise<PlayManager> {
     this.logger.info("Stop called");
     this._playing = false;
+    if (this.isLavalinkMode) {
+      const guildId = this.server.getGuildId();
+      if (this.lavalinkBackend.isConnected(guildId)) {
+        this._cost = 0;
+        this._lavalinkPlaying = false;
+        this._lavalinkPaused = false;
+        await this.lavalinkBackend.stop(guildId);
+        this.emit("stop");
+      }
+      return this;
+    }
     if (this.server.connection) {
       this._cost = 0;
       if (this._player) {
@@ -648,7 +792,16 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     await this.stop({ force: true });
     this.emit("disconnectAttempt");
 
-    if (this.server.connection) {
+    if (this.isLavalinkMode) {
+      const guildId = this.server.getGuildId();
+      if (this.lavalinkBackend.isConnected(guildId)) {
+        this.logger.info("Disconnected (Lavalink) from " + (this.server.connectingVoiceChannel?.id || guildId));
+        await this.lavalinkBackend.disconnect(guildId);
+        this.emit("disconnect");
+      } else {
+        this.logger.warn("Disconnect called but no Lavalink connection");
+      }
+    } else if (this.server.connection) {
       this.logger.info("Disconnected from " + this.server.connectingVoiceChannel!.id);
       this.server.connection.disconnect();
       this.server.connection.destroy();
@@ -667,6 +820,8 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     this.server.connectingVoiceChannel = null;
 
     this._player = null;
+    this._lavalinkPlaying = false;
+    this._lavalinkPaused = false;
     this._sleeptimerCurrentSong = false;
     this.clearSleepTimerTimeout();
 
@@ -703,7 +858,13 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   pause(lastMember?: Member): PlayManager {
     this.logger.info("Pause called");
     this.emit("pause");
-    this._player!.pause();
+    if (this.isLavalinkMode) {
+      this.lavalinkBackend.pause(this.server.getGuildId());
+      this._lavalinkPaused = true;
+      this._lavalinkPlaying = false;
+    } else {
+      this._player!.pause();
+    }
     this._lastMember = lastMember?.id || null;
     return this;
   }
@@ -716,7 +877,13 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     this.logger.info("Resume called");
     this.emit("resume");
     if (!member || member.id === this._lastMember) {
-      this._player!.unpause();
+      if (this.isLavalinkMode) {
+        this.lavalinkBackend.resume(this.server.getGuildId());
+        this._lavalinkPaused = false;
+        this._lavalinkPlaying = true;
+      } else {
+        this._player!.unpause();
+      }
       this._lastMember = null;
     }
     return this;
@@ -729,8 +896,14 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
   async rewind(): Promise<PlayManager> {
     this.logger.info("Rewind called");
     this.emit("rewind");
-    await this.stop({ wait: true });
-    await this.play().catch(this.logger.error);
+    if (this.isLavalinkMode) {
+      // Lavalink can seek to 0 directly
+      await this.lavalinkBackend.seek(this.server.getGuildId(), 0);
+      this._seek = 0;
+    } else {
+      await this.stop({ wait: true });
+      await this.play().catch(this.logger.error);
+    }
     return this;
   }
 
@@ -777,7 +950,7 @@ export class PlayManager extends ServerManagerBase<PlayManagerEvents> {
     this.logger.info("onStreamFinished called");
 
     // まだ状態が再生中のままであるときには、再生停止中になるまで、最大20秒間待機する
-    if (this.server.connection && this._player?.state.status === AudioPlayerStatus.Playing) {
+    if (!this.isLavalinkMode && this.server.connection && this._player?.state.status === AudioPlayerStatus.Playing) {
       await entersState(this._player, AudioPlayerStatus.Idle, 20e3)
         .catch(() => {
           this.logger.warn("Stream has not ended in time and will force stream into destroying");

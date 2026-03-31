@@ -20,6 +20,13 @@ import type { Static } from "@sinclair/typebox";
 
 import { Type } from "@sinclair/typebox";
 
+const LavalinkNodeSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  url: Type.String({ minLength: 1 }),
+  auth: Type.String({ minLength: 1 }),
+  secure: Type.Optional(Type.Boolean({ default: false })),
+});
+
 const GuildBGMContainer = Type.Object({
   voiceChannelId: Type.RegExp(/^\d+$/),
   allowEditQueue: Type.Boolean(),
@@ -90,6 +97,11 @@ export const ConfigSchema = Type.Object({
   djRoleNames: Type.Optional(Type.Array(Type.String(), { default: ["DJ"] })),
 
   showGuildCountStatus: Type.Optional(Type.Boolean({ default: false })),
+
+  lavalink: Type.Optional(Type.Object({
+    enabled: Type.Boolean({ default: false }),
+    nodes: Type.Array(LavalinkNodeSchema, { minItems: 1 }),
+  })),
 });
 
 export type GuildBGMContainerType = Static<typeof GuildBGMContainer>;

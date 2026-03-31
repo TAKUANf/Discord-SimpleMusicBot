@@ -62,5 +62,20 @@
   ],
 
   // 参加サーバー数および接続中サーバー数に関する情報をボットのステータスに表示するかどうかの設定です。
-  "showGuildCountStatus": false
+  "showGuildCountStatus": false,
+
+  // Lavalink設定 (任意)
+  // Lavalinkサーバーを使用してオーディオ再生を行う場合に設定します。
+  // 設定しない場合はローカルでFFmpeg+@discordjs/voiceを使用して再生します。
+  // "lavalink": {
+  //   "enabled": true,
+  //   "nodes": [
+  //     {
+  //       "name": "main",
+  //       "url": "localhost:2333",
+  //       "auth": "youshallnotpass",
+  //       "secure": false
+  //     }
+  //   ]
+  // }
 }

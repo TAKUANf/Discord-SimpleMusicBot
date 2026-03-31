@@ -16,6 +16,7 @@
  * If not, see <https://www.gnu.org/licenses/>.
  */
 
+import type { FilterOptions } from "shoukaku";
 import type { GuildDataContainer } from "../Structure";
 
 import { MessageButtonBuilder, MessageEmbedBuilder } from "@mtripg6666tdr/oceanic-command-resolver/helper";
@@ -123,6 +124,46 @@ export class AudioEffectManager extends ServerManagerBase<EffectManagerEvents> {
     }
 
     return embed.toOceanic();
+  }
+
+  exportLavalinkFilters(): FilterOptions {
+    const filters: FilterOptions = {};
+
+    if (this.data.bassBoost) {
+      filters.equalizer = [
+        { band: 0, gain: 0.4 },
+        { band: 1, gain: 0.27 },
+        { band: 2, gain: 0.06 },
+      ];
+    }
+
+    if (this.data.nightcore) {
+      filters.timescale = { speed: 1.2, pitch: 1.2, rate: 1.0 };
+    }
+
+    if (this.data.karaoke) {
+      filters.karaoke = { level: 1.0, monoLevel: 0.1, filterBand: 220, filterWidth: 100 };
+    }
+
+    if (this.data["3d"]) {
+      filters.rotation = { rotationHz: 0.125 };
+    }
+
+    if (this.data.reverb) {
+      // Lavalink does not have a direct reverb filter; approximate with tremolo
+      filters.tremolo = { frequency: 4.0, depth: 0.25 };
+    }
+
+    // loudnessEq has no direct Lavalink equivalent; applied best-effort via low pass
+    if (this.data.loudnessEq) {
+      filters.lowPass = { smoothing: 15.0 };
+    }
+
+    return filters;
+  }
+
+  hasAnyEffect(): boolean {
+    return audioEffectNames.some(name => this.data[name]);
   }
 
   createMessageButtons(customIdMap: Record<AudioEffectNames, string>) {

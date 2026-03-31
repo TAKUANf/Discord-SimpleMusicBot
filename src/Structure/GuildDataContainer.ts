@@ -322,11 +322,33 @@ export class GuildDataContainer extends LogEmitter<GuildDataContainerEvents> {
    */
   async joinVoiceChannelOnly(channelId: string) {
     const targetChannel = this.bot.client.getChannel<VoiceChannel | StageChannel>(channelId)!;
+    this.connectingVoiceChannel = targetChannel;
+
+    if (this.bot.isLavalinkMode) {
+      // Lavalink mode: let Shoukaku manage voice connections
+      const guildId = this.getGuildId();
+      const shardId = this.bot.client.guilds.get(guildId)?.shard.id ?? 0;
+      await this.bot.playbackBackend.joinVoiceChannel(guildId, channelId, shardId, true);
+
+      // ニックネームの変更
+      const guild = this.bot.client.guilds.get(guildId)!;
+      const botSelf = guild.clientMember;
+      let nickname = botSelf.nick;
+      const stopButton = String.fromCharCode(9209);
+      if (nickname && (nickname.includes("🈳") || nickname.includes(stopButton) || nickname.includes("🈵") || nickname.includes("▶"))) {
+        nickname = nickname.replace("🈳", "🈵");
+        nickname = nickname.replace(stopButton, "▶");
+        await guild.editCurrentMember({ nick: nickname }).catch(this.logger.error);
+      }
+
+      this.logger.info(`Connected to ${channelId} (Lavalink)`);
+      return;
+    }
+
     const connection = targetChannel.join({
       selfDeaf: true,
       debug: config.debug,
     });
-    this.connectingVoiceChannel = targetChannel;
     if (this.connection === connection) return;
 
     await entersState(connection, VoiceConnectionStatus.Ready, 10e3);
