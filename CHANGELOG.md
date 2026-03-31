@@ -1,3 +1,17 @@
+## 機能追加
+* Discord DAVE (Audio & Video End-to-End Encryption) プロトコルに対応
+  * 2026年3月2日よりDiscordのボイスチャンネルでDAVEプロトコルが必須化されたため、それに対応しました。
+  * この変更に伴い、Node.js v22.12.0以上が必須となります。
+## 依存関係のアップデート
+* @discordjs/voice ^0.18.0 => ^0.19.0
+* @snazzah/davey ^0.1.7 => ^0.1.11
+* oceanic.js ~1.13.0 => ~1.14.0
+### その他の特記事項
+#### Node.jsのバージョンについて
+@discordjs/voice v0.19.0 以降では Node.js v22.12.0 以上が必須です。それ以前のバージョンではボイスチャンネルへの接続ができません。
+
+---
+
 # v4.5.0
 ## 機能追加
 * 再生開始時にボイスチャンネルやステージチャンネルのトピックを更新する設定(https://github.com/mtripg6666tdr/Discord-SimpleMusicBot/pull/2900, https://github.com/mtripg6666tdr/Discord-SimpleMusicBot/pull/2902)
