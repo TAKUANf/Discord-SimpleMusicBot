@@ -1,21 +1,3 @@
-/*
- * Copyright 2021-2025 mtripg6666tdr
- *
- * This file is part of mtripg6666tdr/Discord-SimpleMusicBot.
- * (npm package name: 'discord-music-bot' / repository url: <https://github.com/mtripg6666tdr/Discord-SimpleMusicBot> )
- *
- * mtripg6666tdr/Discord-SimpleMusicBot is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free Software Foundation,
- * either version 3 of the License, or (at your option) any later version.
- *
- * mtripg6666tdr/Discord-SimpleMusicBot is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along with mtripg6666tdr/Discord-SimpleMusicBot.
- * If not, see <https://www.gnu.org/licenses/>.
- */
-
 import { getLogger } from "../../../logger";
 
 const logger = getLogger("StrategyHealthMonitor");
@@ -24,12 +6,13 @@ interface StrategyMetrics {
   successes: number;
   failures: number;
   totalLatencyMs: number;
-  recentResults: boolean[]; // true = success, last N results
+  recentResults: boolean[]; // true=成功
 }
 
+// 直近20回の結果で判定、失敗率80%超で自動無効化、30分ごとにリカバリー
 const MAX_RECENT_RESULTS = 20;
 const AUTO_DISABLE_FAILURE_RATE = 0.8;
-const RECOVERY_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const RECOVERY_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 export class StrategyHealthMonitor {
   private metrics: Map<number, StrategyMetrics> = new Map();
@@ -54,7 +37,6 @@ export class StrategyHealthMonitor {
       m.recentResults.shift();
     }
 
-    // Re-enable if previously disabled and now succeeding
     if (this.disabledStrategies.has(strategyIndex)) {
       this.disabledStrategies.delete(strategyIndex);
       logger.info(`Strategy #${strategyIndex} re-enabled after successful attempt`);
@@ -69,13 +51,12 @@ export class StrategyHealthMonitor {
       m.recentResults.shift();
     }
 
-    // Auto-disable if recent failure rate exceeds threshold
     this.checkAutoDisable(strategyIndex);
   }
 
   private checkAutoDisable(strategyIndex: number): void {
     const m = this.metrics.get(strategyIndex);
-    if (!m || m.recentResults.length < 5) return; // Need at least 5 samples
+    if (!m || m.recentResults.length < 5) return;
 
     const recentFailures = m.recentResults.filter(r => !r).length;
     const failureRate = recentFailures / m.recentResults.length;
@@ -87,42 +68,13 @@ export class StrategyHealthMonitor {
   }
 
   isDisabled(strategyIndex: number): boolean {
-    // Periodically allow recovery attempts
+    // 定期的にリカバリーチェック
     if (this.disabledStrategies.size > 0 && Date.now() - this.lastRecoveryCheck >= RECOVERY_CHECK_INTERVAL_MS) {
       this.lastRecoveryCheck = Date.now();
       this.disabledStrategies.clear();
       logger.info("Recovery check: all auto-disabled strategies re-enabled for retry");
     }
     return this.disabledStrategies.has(strategyIndex);
-  }
-
-  /**
-   * Returns strategy indices sorted by health score (higher is better).
-   * Strategies with higher success rate and lower latency are preferred.
-   */
-  getOrderedStrategies(enabledIndices: number[]): number[] {
-    return [...enabledIndices].sort((a, b) => {
-      const ma = this.metrics.get(a);
-      const mb = this.metrics.get(b);
-
-      // Strategies with no data go in their original order
-      if (!ma && !mb) return 0;
-      if (!ma) return 1;
-      if (!mb) return -1;
-
-      const successRateA = ma.successes / (ma.successes + ma.failures) || 0;
-      const successRateB = mb.successes / (mb.successes + mb.failures) || 0;
-
-      // Primary: success rate (higher is better)
-      if (Math.abs(successRateA - successRateB) > 0.1) {
-        return successRateB - successRateA;
-      }
-
-      // Secondary: average latency (lower is better)
-      const avgLatencyA = ma.successes > 0 ? ma.totalLatencyMs / ma.successes : Infinity;
-      const avgLatencyB = mb.successes > 0 ? mb.totalLatencyMs / mb.successes : Infinity;
-      return avgLatencyA - avgLatencyB;
-    });
   }
 }
 
